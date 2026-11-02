@@ -1,0 +1,1415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0d0e15" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="Trail Hunt — a minimalist neon Oregon Trail hunting gallery." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Trail Hunt" />
+  <title>Trail Hunt</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%230d0e15' width='32' height='32'/%3E%3Cpath d='M8 22 16 8l8 14' fill='none' stroke='%233dfff3' stroke-width='1.6'/%3E%3Cpath d='M6 14h6M20 14h6M16 6v6' fill='none' stroke='%23ffe566' stroke-width='1.4'/%3E%3C/svg%3E" />
+  <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22Trail%20Hunt%22%2C%22short_name%22%3A%22Trail%20Hunt%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230d0e15%22%2C%22theme_color%22%3A%22%230d0e15%22%2C%22start_url%22%3A%22.%22%7D" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0d0e15;
+      --cyan: #3dfff3;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      touch-action: none;
+    }
+
+    html, body {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      color: var(--cyan);
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;
+      cursor: crosshair;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" aria-label="Trail Hunt" role="application"></canvas>
+  <script>
+    "use strict";
+
+    const CYAN = "#3dfff3";
+    const MAGENTA = "#ff2eb8";
+    const LIME = "#c6ff3a";
+    const YELLOW = "#ffe566";
+    const PURPLE = "#c14bff";
+    const WHITE = "#f4ffff";
+    const MUTED = "#7d8eaa";
+    const BG = "#0d0e15";
+
+    const VW = 480;
+    const VH = 800;
+    const BEST_KEY = "trail-hunt-best";
+    const HUNT_SECONDS = 45;
+    const MAG_SIZE = 10;
+    const RELOAD_TIME = 1.2;
+    const COCKPIT_Y = 656;
+    const FIELD_TOP = 86;
+    const MONO = '"Share Tech Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+    const DISPLAY = '700 {size}px Orbitron, "Segoe UI", sans-serif';
+
+    const SPECIES = {
+      rabbit: { food: 150, min: 280, max: 380, hit: 36, color: LIME },
+      deer: { food: 80, min: 140, max: 190, hit: 62, color: CYAN },
+      mammoth: { food: 40, min: 62, max: 92, hit: 72, color: PURPLE },
+    };
+
+    const LANES = [
+      { y: 228, scale: 0.74, favor: "rabbit" },
+      { y: 318, scale: 0.88, favor: "rabbit" },
+      { y: 408, scale: 1, favor: "deer" },
+      { y: 498, scale: 1.06, favor: "deer" },
+      { y: 586, scale: 1.14, favor: "mammoth" },
+    ];
+
+    const SAMPLES = [
+      { name: "RABBIT", kind: "rabbit", food: 150, color: LIME, x: 86, y: 492, dir: 1, scale: 0.92, seed: 0.4, walk: 0 },
+      { name: "DEER", kind: "deer", food: 80, color: CYAN, x: 240, y: 498, dir: 1, scale: 0.76, seed: 1.7, walk: 0 },
+      { name: "MAMMOTH", kind: "mammoth", food: 40, color: PURPLE, x: 392, y: 504, dir: 1, scale: 0.58, seed: 2.8, walk: 0 },
+    ];
+
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d", { alpha: false });
+
+    const view = { cssW: 1, cssH: 1, dpr: 1, scale: 1, offsetX: 0, offsetY: 0 };
+    const keys = new Set();
+    const pointers = new Set();
+    const farStars = [];
+    const nearStars = [];
+    const animals = [];
+    const particles = [];
+    const floaters = [];
+    const tracers = [];
+
+    const aim = { x: VW / 2, y: 400 };
+
+    let mode = "title";
+    let food = 0;
+    let best = 0;
+    let newBest = false;
+    let ammo = MAG_SIZE;
+    let reloadLeft = 0;
+    let clock = HUNT_SECONDS;
+    let time = 0;
+    let shake = 0;
+    let flash = 0;
+    let banner = null;
+    let inputLock = 0;
+    let spawnTimer = 0.6;
+    let gridOffset = 0;
+    let audioCtx = null;
+    let noiseBuffer = null;
+
+    try {
+      best = Math.max(0, Number(localStorage.getItem(BEST_KEY)) || 0);
+    } catch (err) {
+      best = 0;
+    }
+
+    function rand(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    function clamp(v, a, b) {
+      return v < a ? a : v > b ? b : v;
+    }
+
+    function pad(n) {
+      return String(Math.max(0, n | 0)).padStart(5, "0");
+    }
+
+    function pad2(n) {
+      return String(Math.max(0, n | 0)).padStart(2, "0");
+    }
+
+    function displayFont(size) {
+      return DISPLAY.replace("{size}", String(size));
+    }
+
+    function formatClock(seconds) {
+      const s = Math.max(0, Math.ceil(seconds - 1e-4));
+      return pad2((s / 60) | 0) + ":" + pad2(s % 60);
+    }
+
+    function layout() {
+      view.cssW = Math.max(1, window.innerWidth);
+      view.cssH = Math.max(1, window.innerHeight);
+      view.dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 3));
+      canvas.width = Math.round(view.cssW * view.dpr);
+      canvas.height = Math.round(view.cssH * view.dpr);
+      canvas.style.width = view.cssW + "px";
+      canvas.style.height = view.cssH + "px";
+      view.scale = Math.min(view.cssW / VW, view.cssH / VH);
+      view.offsetX = (view.cssW - VW * view.scale) / 2;
+      view.offsetY = (view.cssH - VH * view.scale) / 2;
+    }
+
+    function scatterStars() {
+      const area = view.cssW * view.cssH;
+      const farCount = clamp(Math.round(area / 16000), 42, 120);
+      const nearCount = clamp(Math.round(area / 36000), 16, 46);
+      farStars.length = 0;
+      nearStars.length = 0;
+      for (let i = 0; i < farCount; i++) farStars.push(makeStar(12, 28, Math.random() < 0.8 ? 1 : 2, 0.14, 0.34));
+      for (let i = 0; i < nearCount; i++) nearStars.push(makeStar(48, 96, 2, 0.45, 0.85));
+    }
+
+    function makeStar(minV, maxV, size, minA, maxA) {
+      const bases = [
+        [61, 255, 243],
+        [244, 255, 255],
+        [255, 46, 184],
+        [198, 255, 58],
+        [193, 75, 255],
+      ];
+      const rgb = bases[(Math.random() * bases.length) | 0];
+      const alpha = rand(minA, maxA);
+      return {
+        x: Math.random() * view.cssW,
+        y: Math.random() * view.cssH,
+        s: size,
+        v: rand(minV, maxV),
+        c: "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + alpha.toFixed(3) + ")",
+      };
+    }
+
+    function unlockAudio() {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+    }
+
+    function tone(freq, dur, type, vol, slide) {
+      if (!audioCtx || freq <= 0 || vol <= 0) return;
+      try {
+        const t = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t);
+        if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(t);
+        osc.stop(t + dur + 0.02);
+      } catch (err) {
+        /* audio is optional */
+      }
+    }
+
+    function ensureNoise() {
+      if (!audioCtx || noiseBuffer) return;
+      const length = Math.floor(audioCtx.sampleRate * 0.09);
+      const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+      noiseBuffer = buffer;
+    }
+
+    function noise(dur, vol, freq) {
+      if (!audioCtx || vol <= 0) return;
+      try {
+        ensureNoise();
+        const src = audioCtx.createBufferSource();
+        const filter = audioCtx.createBiquadFilter();
+        const gain = audioCtx.createGain();
+        const t = audioCtx.currentTime;
+        src.buffer = noiseBuffer;
+        filter.type = "bandpass";
+        filter.frequency.setValueAtTime(freq, t);
+        filter.Q.setValueAtTime(0.7, t);
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(audioCtx.destination);
+        src.start(t);
+        src.stop(t + dur + 0.02);
+      } catch (err) {
+        /* audio is optional */
+      }
+    }
+
+    function sfxShot() {
+      noise(0.045, 0.05, 1800);
+      tone(170, 0.07, "square", 0.03, 55);
+    }
+
+    function sfxHit(foodValue) {
+      tone(foodValue >= 150 ? 720 : 560, 0.06, "square", 0.035, foodValue >= 150 ? 1180 : 880);
+    }
+
+    function sfxEmpty() {
+      tone(92, 0.045, "square", 0.028, 48);
+    }
+
+    function sfxReload() {
+      tone(240, 0.08, "triangle", 0.03, 110);
+    }
+
+    function sfxReloadDone() {
+      tone(520, 0.045, "square", 0.03, 840);
+    }
+
+    function virtualPoint(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const scale = view.scale || 1;
+      return {
+        x: (clientX - rect.left - view.offsetX) / scale,
+        y: (clientY - rect.top - view.offsetY) / scale,
+      };
+    }
+
+    function inCockpit(y) {
+      return y >= COCKPIT_Y;
+    }
+
+    function pickKind(lane) {
+      const roll = Math.random();
+      if (lane.favor === "rabbit") {
+        if (roll < 0.58) return "rabbit";
+        if (roll < 0.86) return "deer";
+        return "mammoth";
+      }
+      if (lane.favor === "mammoth") {
+        if (roll < 0.52) return "mammoth";
+        if (roll < 0.84) return "deer";
+        return "rabbit";
+      }
+      if (roll < 0.46) return "deer";
+      if (roll < 0.78) return "rabbit";
+      return "mammoth";
+    }
+
+    function laneClear(lane, dir) {
+      const entry = dir > 0 ? -40 : VW + 40;
+      for (let i = 0; i < animals.length; i++) {
+        const animal = animals[i];
+        if (Math.abs(animal.y - lane.y) < 8 && Math.abs(animal.x - entry) < 120) return false;
+      }
+      return true;
+    }
+
+    function spawnAnimal(lane, dir, x) {
+      const kind = pickKind(lane);
+      const spec = SPECIES[kind];
+      const speed = rand(spec.min, spec.max);
+      animals.push({
+        kind,
+        x: x == null ? (dir > 0 ? -90 : VW + 90) : x,
+        y: lane.y,
+        dir,
+        vx: dir * speed,
+        scale: lane.scale,
+        hit: Math.max(18, spec.hit * lane.scale),
+        food: spec.food,
+        color: spec.color,
+        walk: rand(0, 8),
+        seed: rand(0, Math.PI * 2),
+      });
+    }
+
+    function seedHunt() {
+      animals.length = 0;
+      spawnAnimal(LANES[0], 1, 96);
+      spawnAnimal(LANES[2], -1, VW - 150);
+      spawnAnimal(LANES[4], 1, 36);
+    }
+
+    function startGame() {
+      if (inputLock > 0) return;
+      if (mode === "play") return;
+      inputLock = 0.28;
+      food = 0;
+      ammo = MAG_SIZE;
+      reloadLeft = 0;
+      clock = HUNT_SECONDS;
+      newBest = false;
+      shake = 0;
+      flash = 0;
+      spawnTimer = 0.55;
+      aim.x = VW / 2;
+      aim.y = 400;
+      particles.length = 0;
+      floaters.length = 0;
+      tracers.length = 0;
+      seedHunt();
+      mode = "play";
+      banner = { text: "THE HUNT", color: CYAN, age: 0, life: 1.05 };
+      tone(523, 0.07, "square", 0.03, 784);
+    }
+
+    function endRun() {
+      if (mode !== "play") return;
+      mode = "over";
+      inputLock = 0.45;
+      clock = 0;
+      newBest = food > best;
+      if (newBest) {
+        best = food;
+        try {
+          localStorage.setItem(BEST_KEY, String(best));
+        } catch (err) {
+          /* private mode */
+        }
+      }
+      tone(196, 0.12, "triangle", 0.03, 90);
+    }
+
+    function popup(x, y, text, color) {
+      floaters.push({ x, y, text, color, life: 0.72, max: 0.72 });
+      if (floaters.length > 24) floaters.splice(0, floaters.length - 24);
+    }
+
+    function burst(x, y, color, count, speedMin, speedMax) {
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count + rand(-0.2, 0.2);
+        const speed = rand(speedMin, speedMax);
+        const life = rand(0.28, 0.55);
+        particles.push({
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life,
+          max: life,
+          len: rand(6, 14),
+          size: rand(1.8, 3.6),
+          color: i % 5 === 0 ? WHITE : color,
+          kind: i % 2 === 0 ? "line" : "square",
+          rot: angle,
+          spin: rand(-6, 6),
+        });
+      }
+      if (particles.length > 180) particles.splice(0, particles.length - 180);
+    }
+
+    function vaporize(animal) {
+      burst(animal.x, animal.y, animal.color, 20, 100, 340);
+      popup(animal.x, animal.y - 20 * animal.scale, "+" + animal.food + " LBS", YELLOW);
+      food += animal.food;
+      flash = Math.max(flash, animal.food >= 150 ? 0.85 : 0.4);
+      shake = Math.max(shake, animal.food >= 150 ? 7 : 4);
+      sfxHit(animal.food);
+      const index = animals.indexOf(animal);
+      if (index >= 0) animals.splice(index, 1);
+    }
+
+    function nearestHit() {
+      let bestAnimal = null;
+      let bestDist = Infinity;
+      for (let i = 0; i < animals.length; i++) {
+        const animal = animals[i];
+        if (animal.x < -12 || animal.x > VW + 12) continue;
+        const dx = animal.x - aim.x;
+        const dy = animal.y - aim.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= animal.hit && dist < bestDist) {
+          bestAnimal = animal;
+          bestDist = dist;
+        }
+      }
+      return bestAnimal;
+    }
+
+    function fireShot() {
+      if (mode !== "play") return;
+      if (reloadLeft > 0 || ammo <= 0) {
+        sfxEmpty();
+        flash = Math.max(flash, 0.18);
+        return;
+      }
+      ammo -= 1;
+      sfxShot();
+      shake = Math.max(shake, 2.2);
+      const animal = nearestHit();
+      tracers.push({
+        x: aim.x,
+        y: aim.y,
+        life: 0.09,
+        max: 0.09,
+        hit: !!animal,
+      });
+      if (animal) vaporize(animal);
+      else burst(aim.x, aim.y, MUTED, 6, 40, 120);
+    }
+
+    function beginReload() {
+      if (mode !== "play") return;
+      if (reloadLeft > 0 || ammo >= MAG_SIZE) {
+        sfxEmpty();
+        return;
+      }
+      reloadLeft = RELOAD_TIME;
+      sfxReload();
+    }
+
+    function trackAim(point) {
+      if (mode !== "play" || !point || inCockpit(point.y)) return;
+      aim.x = clamp(point.x, 18, VW - 18);
+      aim.y = clamp(point.y, FIELD_TOP, COCKPIT_Y - 18);
+    }
+
+    function handleAction(point) {
+      unlockAudio();
+      if (mode !== "play") {
+        startGame();
+        return;
+      }
+      if (point && inCockpit(point.y)) {
+        beginReload();
+        return;
+      }
+      if (point) {
+        aim.x = clamp(point.x, 18, VW - 18);
+        aim.y = clamp(point.y, FIELD_TOP, COCKPIT_Y - 18);
+      }
+      fireShot();
+    }
+
+    function updateStars(dt) {
+      const layers = [farStars, nearStars];
+      for (let n = 0; n < layers.length; n++) {
+        const layer = layers[n];
+        for (let i = 0; i < layer.length; i++) {
+          const star = layer[i];
+          star.y += star.v * dt;
+          if (star.y > view.cssH) {
+            star.y = -2;
+            star.x = Math.random() * view.cssW;
+          }
+        }
+      }
+    }
+
+    function updateAnimals(dt) {
+      const rush = 1 + (1 - clock / HUNT_SECONDS) * 0.28;
+      for (let i = animals.length - 1; i >= 0; i--) {
+        const animal = animals[i];
+        const pace = mode === "play" ? rush : 0.55;
+        animal.x += animal.vx * pace * dt;
+        animal.walk += Math.abs(animal.vx) * pace * dt;
+        if (animal.x < -160 || animal.x > VW + 160) animals.splice(i, 1);
+      }
+    }
+
+    function updateSpawns(dt) {
+      spawnTimer -= dt;
+      if (spawnTimer > 0) return;
+      const urgency = 1 - clock / HUNT_SECONDS;
+      spawnTimer = Math.max(0.36, 0.9 - urgency * 0.48);
+      if (animals.length >= 5) return;
+      const lane = LANES[(Math.random() * LANES.length) | 0];
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      if (laneClear(lane, dir)) spawnAnimal(lane, dir);
+    }
+
+    function updateAimKeys(dt) {
+      let dx = 0;
+      let dy = 0;
+      if (keys.has("ArrowLeft") || keys.has("KeyA")) dx -= 1;
+      if (keys.has("ArrowRight") || keys.has("KeyD")) dx += 1;
+      if (keys.has("ArrowUp") || keys.has("KeyW")) dy -= 1;
+      if (keys.has("ArrowDown") || keys.has("KeyS")) dy += 1;
+      if (dx === 0 && dy === 0) return;
+      const length = Math.hypot(dx, dy) || 1;
+      aim.x = clamp(aim.x + (dx / length) * 320 * dt, 18, VW - 18);
+      aim.y = clamp(aim.y + (dy / length) * 320 * dt, FIELD_TOP, COCKPIT_Y - 18);
+    }
+
+    function updateParticles(dt) {
+      const damp = Math.exp(-3.4 * dt);
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const particle = particles[i];
+        particle.x += particle.vx * dt;
+        particle.y += particle.vy * dt;
+        particle.vx *= damp;
+        particle.vy *= damp;
+        particle.rot += particle.spin * dt;
+        particle.life -= dt;
+        if (particle.life <= 0) particles.splice(i, 1);
+      }
+    }
+
+    function updateFloaters(dt) {
+      for (let i = floaters.length - 1; i >= 0; i--) {
+        const floater = floaters[i];
+        floater.y -= 40 * dt;
+        floater.life -= dt;
+        if (floater.life <= 0) floaters.splice(i, 1);
+      }
+    }
+
+    function updateTracers(dt) {
+      for (let i = tracers.length - 1; i >= 0; i--) {
+        tracers[i].life -= dt;
+        if (tracers[i].life <= 0) tracers.splice(i, 1);
+      }
+    }
+
+    function updateReload(dt) {
+      if (reloadLeft <= 0) return;
+      reloadLeft -= dt;
+      if (reloadLeft > 0) return;
+      reloadLeft = 0;
+      ammo = MAG_SIZE;
+      sfxReloadDone();
+    }
+
+    function update(dt) {
+      time += dt;
+      gridOffset = (gridOffset + dt * 18) % 46;
+      if (inputLock > 0) inputLock = Math.max(0, inputLock - dt);
+      if (shake > 0) {
+        shake *= Math.exp(-7 * dt);
+        if (shake < 0.2) shake = 0;
+      }
+      if (flash > 0) flash = Math.max(0, flash - dt * 1.7);
+      if (banner) {
+        banner.age += dt;
+        if (banner.age >= banner.life) banner = null;
+      }
+      updateStars(dt);
+      updateParticles(dt);
+      updateFloaters(dt);
+      updateTracers(dt);
+      if (mode === "title") return;
+      updateAnimals(dt);
+      if (mode !== "play") return;
+      updateSpawns(dt);
+      updateReload(dt);
+      updateAimKeys(dt);
+      clock -= dt;
+      if (clock <= 0) {
+        clock = 0;
+        endRun();
+      }
+    }
+
+    function enterCabinet() {
+      ctx.setTransform(
+        view.dpr * view.scale,
+        0,
+        0,
+        view.dpr * view.scale,
+        view.offsetX * view.dpr,
+        view.offsetY * view.dpr
+      );
+      ctx.lineJoin = "miter";
+      ctx.miterLimit = 2;
+      ctx.lineCap = "square";
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+      ctx.letterSpacing = "0px";
+    }
+
+    function drawBackdrop() {
+      ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(61, 255, 243, 0.045)";
+      ctx.lineWidth = 1;
+      const gap = 46;
+      for (let y = gridOffset; y < view.cssH; y += gap) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(view.cssW, y);
+        ctx.stroke();
+      }
+      for (let x = 0; x < view.cssW; x += gap) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, view.cssH);
+        ctx.stroke();
+      }
+      const layers = [farStars, nearStars];
+      for (let n = 0; n < layers.length; n++) {
+        const layer = layers[n];
+        for (let i = 0; i < layer.length; i++) {
+          const star = layer[i];
+          ctx.fillStyle = star.c;
+          ctx.fillRect((star.x + 0.5) | 0, (star.y + 0.5) | 0, star.s, star.s);
+        }
+      }
+    }
+
+    function drawFrame() {
+      ctx.save();
+      ctx.strokeStyle = "rgba(61, 255, 243, 0.16)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(1, 1, VW - 2, VH - 2);
+      ctx.restore();
+    }
+
+    function drawSkyline() {
+      const day = mode === "play" ? clock / HUNT_SECONDS : mode === "over" ? 0.08 : 1;
+      const sunY = 108 + (1 - day) * 52;
+      ctx.save();
+      ctx.lineWidth = 1.25;
+      ctx.strokeStyle = day > 0.22 ? YELLOW : PURPLE;
+      ctx.shadowColor = ctx.strokeStyle;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(386, sunY, 16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(255, 46, 184, 0.42)";
+      ctx.beginPath();
+      ctx.moveTo(0, 156);
+      ctx.lineTo(36, 156);
+      ctx.lineTo(72, 118);
+      ctx.lineTo(112, 156);
+      ctx.lineTo(168, 96);
+      ctx.lineTo(214, 156);
+      ctx.lineTo(258, 126);
+      ctx.lineTo(304, 156);
+      ctx.lineTo(352, 104);
+      ctx.lineTo(410, 156);
+      ctx.lineTo(VW, 156);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawGround() {
+      const horizon = 156;
+      const floor = COCKPIT_Y;
+      ctx.save();
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(61, 255, 243, 0.2)";
+      ctx.beginPath();
+      ctx.moveTo(0, horizon);
+      ctx.lineTo(VW, horizon);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(61, 255, 243, 0.07)";
+      for (let i = 0; i <= 12; i++) {
+        ctx.beginPath();
+        ctx.moveTo(VW / 2, horizon);
+        ctx.lineTo((i / 12) * VW, floor);
+        ctx.stroke();
+      }
+      for (let i = 1; i <= 8; i++) {
+        const t = i / 8;
+        const y = horizon + (floor - horizon) * t * t;
+        ctx.globalAlpha = 0.28 + t * 0.72;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(VW, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function traceRabbit(phase) {
+      const step = Math.sin(phase);
+      ctx.beginPath();
+      ctx.moveTo(8, -2);
+      ctx.lineTo(-16, -8);
+      ctx.lineTo(-24, 2);
+      ctx.lineTo(-12, 10);
+      ctx.lineTo(8, 8);
+      ctx.closePath();
+      ctx.moveTo(6, -1);
+      ctx.lineTo(16, -6);
+      ctx.lineTo(24, -1);
+      ctx.lineTo(16, 6);
+      ctx.lineTo(6, 5);
+      ctx.moveTo(12, -6);
+      ctx.lineTo(9, -24);
+      ctx.lineTo(16, -7);
+      ctx.moveTo(16, -5);
+      ctx.lineTo(20, -22);
+      ctx.lineTo(23, -4);
+      ctx.moveTo(18, -1);
+      ctx.lineTo(20, -1);
+      ctx.moveTo(2, 8);
+      ctx.lineTo(-1, 18 + step * 3);
+      ctx.moveTo(-10, 9);
+      ctx.lineTo(-14, 18 - step * 3);
+      ctx.moveTo(-18, 4);
+      ctx.lineTo(-22, 16 + step * 2);
+      ctx.moveTo(-22, -1);
+      ctx.lineTo(-30, -6);
+      ctx.lineTo(-27, 2);
+    }
+
+    function traceDeer(phase) {
+      const step = Math.sin(phase);
+      ctx.beginPath();
+      ctx.moveTo(18, -2);
+      ctx.lineTo(-18, -10);
+      ctx.lineTo(-30, 2);
+      ctx.lineTo(-16, 12);
+      ctx.lineTo(16, 10);
+      ctx.closePath();
+      ctx.moveTo(14, -2);
+      ctx.lineTo(26, -16);
+      ctx.lineTo(40, -18);
+      ctx.lineTo(44, -10);
+      ctx.lineTo(30, -6);
+      ctx.lineTo(16, 6);
+      ctx.moveTo(30, -18);
+      ctx.lineTo(24, -34);
+      ctx.lineTo(16, -28);
+      ctx.moveTo(24, -34);
+      ctx.lineTo(32, -40);
+      ctx.moveTo(36, -17);
+      ctx.lineTo(42, -34);
+      ctx.lineTo(50, -28);
+      ctx.moveTo(42, -34);
+      ctx.lineTo(46, -42);
+      ctx.moveTo(8, 10);
+      ctx.lineTo(6, 26 + step * 4);
+      ctx.moveTo(-4, 11);
+      ctx.lineTo(-6, 26 - step * 4);
+      ctx.moveTo(-14, 10);
+      ctx.lineTo(-18, 24 + step * 3);
+      ctx.moveTo(-24, 6);
+      ctx.lineTo(-28, 24 - step * 3);
+      ctx.moveTo(-26, -4);
+      ctx.lineTo(-34, -12);
+    }
+
+    function traceMammoth(phase) {
+      const step = Math.sin(phase);
+      ctx.beginPath();
+      ctx.moveTo(16, -18);
+      ctx.lineTo(-4, -26);
+      ctx.lineTo(-24, -14);
+      ctx.lineTo(-32, 2);
+      ctx.lineTo(-22, 16);
+      ctx.lineTo(4, 20);
+      ctx.lineTo(24, 8);
+      ctx.lineTo(22, -8);
+      ctx.closePath();
+      ctx.moveTo(16, -8);
+      ctx.lineTo(32, -14);
+      ctx.lineTo(44, -2);
+      ctx.lineTo(36, 8);
+      ctx.lineTo(18, 6);
+      ctx.moveTo(34, -4);
+      ctx.lineTo(38, -4);
+      ctx.moveTo(40, 2);
+      ctx.lineTo(54, 16);
+      ctx.lineTo(48, 20);
+      ctx.moveTo(34, 8);
+      ctx.lineTo(46, 22);
+      ctx.lineTo(40, 26);
+      ctx.moveTo(42, 0);
+      ctx.lineTo(52, 14);
+      ctx.lineTo(48, 26);
+      ctx.lineTo(40, 32);
+      ctx.moveTo(8, 16);
+      ctx.lineTo(6, 34 + step * 3);
+      ctx.moveTo(-4, 18);
+      ctx.lineTo(-6, 34 - step * 3);
+      ctx.moveTo(-16, 14);
+      ctx.lineTo(-20, 32 + step * 2);
+      ctx.moveTo(-26, 8);
+      ctx.lineTo(-30, 28 - step * 2);
+    }
+
+    function traceFauna(kind, phase) {
+      if (kind === "rabbit") traceRabbit(phase);
+      else if (kind === "deer") traceDeer(phase);
+      else traceMammoth(phase);
+    }
+
+    function drawAnimal(animal) {
+      const bob = Math.sin(time * 2.1 + animal.seed) * 1.6;
+      ctx.save();
+      ctx.translate(animal.x, animal.y + bob);
+      ctx.scale((animal.dir || 1) * animal.scale, animal.scale);
+      traceFauna(animal.kind, animal.walk * 0.2);
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = animal.color;
+      ctx.shadowColor = animal.color;
+      ctx.shadowBlur = 8;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = WHITE;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawAnimals() {
+      const order = animals.slice().sort(function (a, b) { return a.scale - b.scale; });
+      for (let i = 0; i < order.length; i++) {
+        const animal = order[i];
+        ctx.save();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(125, 142, 170, 0.45)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.ellipse(animal.x, animal.y + 16 * animal.scale, 16 * animal.scale, 4.5 * animal.scale, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        drawAnimal(animal);
+      }
+    }
+
+    function drawParticles() {
+      for (let i = 0; i < particles.length; i++) {
+        const particle = particles[i];
+        const alpha = Math.max(0, particle.life / particle.max);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = particle.color;
+        ctx.shadowColor = particle.color;
+        ctx.shadowBlur = 8;
+        ctx.lineWidth = 1.35;
+        if (particle.kind === "square") {
+          ctx.translate(particle.x, particle.y);
+          ctx.rotate(particle.rot);
+          ctx.strokeRect(-particle.size, -particle.size, particle.size * 2, particle.size * 2);
+        } else {
+          const mag = Math.hypot(particle.vx, particle.vy) || 1;
+          const len = particle.len * (0.35 + 0.65 * alpha);
+          ctx.beginPath();
+          ctx.moveTo(particle.x, particle.y);
+          ctx.lineTo(particle.x - (particle.vx / mag) * len, particle.y - (particle.vy / mag) * len);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    function drawFloaters() {
+      ctx.save();
+      ctx.font = "14px " + MONO;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.letterSpacing = "0.08em";
+      for (let i = 0; i < floaters.length; i++) {
+        const floater = floaters[i];
+        ctx.globalAlpha = Math.max(0, floater.life / floater.max);
+        ctx.fillStyle = floater.color;
+        ctx.shadowColor = floater.color;
+        ctx.shadowBlur = 8;
+        ctx.fillText(floater.text, floater.x, floater.y);
+      }
+      ctx.restore();
+    }
+
+    function drawTracers() {
+      if (tracers.length === 0) return;
+      ctx.save();
+      ctx.lineWidth = 1.25;
+      for (let i = 0; i < tracers.length; i++) {
+        const tracer = tracers[i];
+        const alpha = Math.max(0, tracer.life / tracer.max);
+        const color = tracer.hit ? WHITE : YELLOW;
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.moveTo(VW / 2, COCKPIT_Y);
+        ctx.lineTo(tracer.x, tracer.y);
+        ctx.stroke();
+        const radius = 5 + (1 - alpha) * 16;
+        ctx.beginPath();
+        ctx.moveTo(tracer.x - radius, tracer.y);
+        ctx.lineTo(tracer.x, tracer.y - radius);
+        ctx.lineTo(tracer.x + radius, tracer.y);
+        ctx.lineTo(tracer.x, tracer.y + radius);
+        ctx.closePath();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawCrosshair() {
+      const color = reloadLeft > 0 ? CYAN : ammo <= 0 ? MAGENTA : YELLOW;
+      const x = aim.x;
+      const y = aim.y;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.strokeStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.moveTo(-16, -6);
+      ctx.lineTo(-16, -16);
+      ctx.lineTo(-6, -16);
+      ctx.moveTo(6, -16);
+      ctx.lineTo(16, -16);
+      ctx.lineTo(16, -6);
+      ctx.moveTo(16, 6);
+      ctx.lineTo(16, 16);
+      ctx.lineTo(6, 16);
+      ctx.moveTo(-6, 16);
+      ctx.lineTo(-16, 16);
+      ctx.lineTo(-16, 6);
+      ctx.moveTo(-5, 0);
+      ctx.lineTo(5, 0);
+      ctx.moveTo(0, -5);
+      ctx.lineTo(0, 5);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawFlash() {
+      if (flash <= 0) return;
+      ctx.save();
+      ctx.globalAlpha = flash * 0.85;
+      ctx.strokeStyle = CYAN;
+      ctx.shadowColor = CYAN;
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 1.5;
+      const inset = 18 + (1 - Math.min(1, flash)) * 26;
+      ctx.strokeRect(inset, inset, VW - inset * 2, VH - inset * 2);
+      ctx.strokeStyle = WHITE;
+      ctx.globalAlpha = flash * 0.45;
+      const n = 16;
+      ctx.beginPath();
+      ctx.moveTo(inset, inset + n);
+      ctx.lineTo(inset, inset);
+      ctx.lineTo(inset + n, inset);
+      ctx.moveTo(VW - inset - n, inset);
+      ctx.lineTo(VW - inset, inset);
+      ctx.lineTo(VW - inset, inset + n);
+      ctx.moveTo(inset, VH - inset - n);
+      ctx.lineTo(inset, VH - inset);
+      ctx.lineTo(inset + n, VH - inset);
+      ctx.moveTo(VW - inset - n, VH - inset);
+      ctx.lineTo(VW - inset, VH - inset);
+      ctx.lineTo(VW - inset, VH - inset - n);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawHUD() {
+      ctx.save();
+      ctx.textBaseline = "middle";
+      ctx.letterSpacing = "0.14em";
+      ctx.font = "11px " + MONO;
+      ctx.fillStyle = MUTED;
+      ctx.shadowBlur = 0;
+      ctx.textAlign = "left";
+      ctx.fillText("FOOD", 22, 20);
+      ctx.textAlign = "center";
+      ctx.fillText("BEST " + pad(best), VW / 2, 20);
+      ctx.textAlign = "right";
+      ctx.fillText("TIME", VW - 22, 20);
+
+      ctx.font = "20px " + MONO;
+      ctx.letterSpacing = "0.06em";
+      ctx.textAlign = "left";
+      ctx.fillStyle = LIME;
+      ctx.shadowColor = LIME;
+      ctx.shadowBlur = 8;
+      ctx.fillText(pad(food), 22, 42);
+
+      const timeColor = clock <= 5 ? MAGENTA : clock <= 10 ? YELLOW : CYAN;
+      ctx.textAlign = "right";
+      ctx.fillStyle = timeColor;
+      ctx.shadowColor = timeColor;
+      ctx.globalAlpha = clock <= 5 && Math.sin(time * 8) > 0 ? 0.4 : 1;
+      ctx.fillText(formatClock(clock), VW - 22, 42);
+      ctx.globalAlpha = 1;
+
+      const rule = ctx.createLinearGradient(22, 0, VW - 22, 0);
+      rule.addColorStop(0, "rgba(61, 255, 243, 0)");
+      rule.addColorStop(0.18, "rgba(61, 255, 243, 0.55)");
+      rule.addColorStop(0.5, "rgba(255, 46, 184, 0.45)");
+      rule.addColorStop(0.82, "rgba(61, 255, 243, 0.55)");
+      rule.addColorStop(1, "rgba(61, 255, 243, 0)");
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = rule;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(22, 58);
+      ctx.lineTo(VW - 22, 58);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawCockpit() {
+      const cells = MAG_SIZE;
+      const cellW = 16;
+      const gap = 6;
+      const total = cells * cellW + (cells - 1) * gap;
+      const x0 = (VW - total) / 2;
+      const cellY = 674;
+      const progress = reloadLeft > 0 ? 1 - reloadLeft / RELOAD_TIME : 0;
+
+      ctx.save();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(61, 255, 243, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(22, COCKPIT_Y);
+      ctx.lineTo(VW - 22, COCKPIT_Y);
+      ctx.stroke();
+
+      ctx.font = "11px " + MONO;
+      ctx.textBaseline = "middle";
+      ctx.letterSpacing = "0.14em";
+      ctx.fillStyle = MUTED;
+      ctx.textAlign = "left";
+      ctx.fillText(pad2(ammo), 24, cellY + 5);
+      ctx.textAlign = "right";
+      ctx.fillStyle = reloadLeft > 0 ? CYAN : ammo <= 0 ? MAGENTA : MUTED;
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.shadowBlur = ammo <= 0 || reloadLeft > 0 ? 8 : 0;
+      ctx.fillText(reloadLeft > 0 ? "OPEN" : ammo <= 0 ? "EMPTY" : "MAG", VW - 24, cellY + 5);
+      ctx.shadowBlur = 0;
+
+      for (let i = 0; i < cells; i++) {
+        const loaded = i < ammo;
+        const x = x0 + i * (cellW + gap);
+        const color = loaded ? LIME : "rgba(125, 142, 170, 0.4)";
+        ctx.strokeStyle = color;
+        ctx.shadowColor = loaded ? LIME : "transparent";
+        ctx.shadowBlur = loaded ? 8 : 0;
+        ctx.lineWidth = 1.25;
+        ctx.strokeRect(x, cellY, cellW, 10);
+        if (loaded) {
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = LIME;
+          ctx.fillRect(x + 3, cellY + 3, cellW - 6, 4);
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      const pulse = ammo < MAG_SIZE && reloadLeft <= 0 ? 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(time * 5)) : 1;
+      const bayColor = reloadLeft > 0 ? CYAN : ammo >= MAG_SIZE ? MUTED : YELLOW;
+      ctx.globalAlpha = ammo >= MAG_SIZE && reloadLeft <= 0 ? 0.55 : pulse;
+      ctx.strokeStyle = bayColor;
+      ctx.shadowColor = bayColor;
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(28, 706, 424, 62);
+      if (reloadLeft > 0) {
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = CYAN;
+        ctx.beginPath();
+        ctx.moveTo(40, 748);
+        ctx.lineTo(40 + 400 * progress, 748);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.font = "13px " + MONO;
+      ctx.textAlign = "center";
+      ctx.letterSpacing = "0.18em";
+      ctx.fillStyle = bayColor;
+      ctx.shadowColor = bayColor;
+      ctx.shadowBlur = 8;
+      const label = reloadLeft > 0 ? "RELOADING" : ammo >= MAG_SIZE ? "MAG FULL" : "RELOAD";
+      ctx.fillText(label, VW / 2, 738);
+      ctx.restore();
+    }
+
+    function drawBanner() {
+      if (!banner) return;
+      const fadeIn = Math.min(1, banner.age * 6);
+      const fadeOut = Math.min(1, (banner.life - banner.age) * 2.4);
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(fadeIn, fadeOut));
+      ctx.font = "14px " + MONO;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.letterSpacing = "0.18em";
+      ctx.fillStyle = banner.color;
+      ctx.shadowColor = banner.color;
+      ctx.shadowBlur = 8;
+      ctx.fillText(banner.text, VW / 2, 174);
+      ctx.restore();
+    }
+
+    function drawTitleBlock(lines) {
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const pulse = 0.5 + 0.5 * Math.sin(time * 2.15);
+      ctx.translate(VW / 2, lines.titleY);
+      ctx.scale(1 + pulse * 0.018, 1 + pulse * 0.018);
+      ctx.font = displayFont(lines.titleSize);
+      ctx.letterSpacing = "0.06em";
+      const width = ctx.measureText(lines.title).width;
+      const fit = Math.min(1, 430 / width);
+      ctx.scale(fit, fit);
+      const grad = ctx.createLinearGradient(0, -34, 0, 30);
+      grad.addColorStop(0, "#ffffff");
+      grad.addColorStop(0.46, CYAN);
+      grad.addColorStop(1, MAGENTA);
+      ctx.fillStyle = grad;
+      ctx.shadowColor = CYAN;
+      ctx.shadowBlur = 10;
+      ctx.fillText(lines.title, 0, 0);
+      ctx.shadowBlur = 0;
+      const rule = ctx.createLinearGradient(-120, 0, 120, 0);
+      rule.addColorStop(0, "rgba(61, 255, 243, 0)");
+      rule.addColorStop(0.2, CYAN);
+      rule.addColorStop(0.8, MAGENTA);
+      rule.addColorStop(1, "rgba(255, 46, 184, 0)");
+      ctx.strokeStyle = rule;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-120, 32);
+      ctx.lineTo(120, 32);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "13px " + MONO;
+      ctx.letterSpacing = "0.12em";
+      if (lines.meta) {
+        ctx.fillStyle = YELLOW;
+        ctx.shadowColor = YELLOW;
+        ctx.shadowBlur = 10;
+        ctx.fillText(lines.meta, VW / 2, lines.metaY);
+      }
+      const breathe = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(time * 2.6));
+      ctx.globalAlpha = breathe;
+      ctx.fillStyle = CYAN;
+      ctx.shadowColor = CYAN;
+      ctx.shadowBlur = 10;
+      ctx.fillText(lines.prompt, VW / 2, lines.promptY);
+      ctx.restore();
+
+      if (!lines.controls) return;
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "11px " + MONO;
+      ctx.letterSpacing = "0.12em";
+      ctx.fillStyle = MUTED;
+      ctx.shadowBlur = 0;
+      const top = lines.controlY || 616;
+      for (let i = 0; i < lines.controls.length; i++) {
+        ctx.fillText(lines.controls[i], VW / 2, top + i * 22);
+      }
+      ctx.restore();
+    }
+
+    function drawBestiary() {
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "11px " + MONO;
+      ctx.letterSpacing = "0.12em";
+      for (let i = 0; i < SAMPLES.length; i++) {
+        const animal = SAMPLES[i];
+        animal.walk = time * 72;
+        drawAnimal(animal);
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = animal.color;
+        ctx.fillStyle = animal.color;
+        ctx.fillText(animal.food + " LBS", animal.x, 572);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = MUTED;
+        ctx.fillText(animal.name, animal.x, 590);
+      }
+      ctx.restore();
+    }
+
+    function drawTitle() {
+      drawTitleBlock({
+        title: "TRAIL HUNT",
+        titleSize: 46,
+        titleY: 236,
+        meta: "BEST " + pad(best) + " LBS",
+        metaY: 312,
+        prompt: "TAP OR PRESS SPACE TO HUNT",
+        promptY: 364,
+        controls: [
+          "TAP / CLICK / SPACE    FIRE",
+          "LOWER BAY / R    RELOAD",
+          "SMALL AND FAST    MORE MEAT",
+          "MAGAZINE 10    RELOAD 1.2S",
+        ],
+        controlY: 628,
+      });
+      drawBestiary();
+    }
+
+    function drawOver() {
+      const phrase = food >= 500 ? "THE WAGON IS FED" : food > 0 ? "A THIN SUPPER" : "THE PARTY GOES HUNGRY";
+      drawTitleBlock({
+        title: "GAME OVER",
+        titleSize: 42,
+        titleY: 286,
+        meta: pad(food) + " LBS",
+        metaY: 368,
+        prompt: "TAP OR PRESS SPACE TO HUNT",
+        promptY: 508,
+        controls: null,
+      });
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "12px " + MONO;
+      ctx.letterSpacing = "0.16em";
+      ctx.fillStyle = food >= 500 ? LIME : MUTED;
+      ctx.shadowColor = food >= 500 ? LIME : "transparent";
+      ctx.shadowBlur = food >= 500 ? 8 : 0;
+      ctx.fillText(phrase, VW / 2, 412);
+      ctx.fillStyle = newBest ? YELLOW : MUTED;
+      ctx.shadowColor = newBest ? YELLOW : "transparent";
+      ctx.shadowBlur = newBest ? 10 : 0;
+      ctx.fillText(newBest ? "NEW BEST" : "BEST " + pad(best) + " LBS", VW / 2, 448);
+      ctx.restore();
+    }
+
+    function drawWorld() {
+      ctx.save();
+      if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+      drawSkyline();
+      drawGround();
+      if (mode !== "title") drawAnimals();
+      drawParticles();
+      drawFloaters();
+      drawTracers();
+      if (mode === "play") drawCrosshair();
+      drawFlash();
+      ctx.restore();
+    }
+
+    function draw() {
+      ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, view.cssW, view.cssH);
+      drawBackdrop();
+      enterCabinet();
+      drawFrame();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, VW, VH);
+      ctx.clip();
+      drawWorld();
+      ctx.restore();
+      if (mode === "play") {
+        drawHUD();
+        drawCockpit();
+        drawBanner();
+      } else if (mode === "title") {
+        drawTitle();
+      } else {
+        drawOver();
+      }
+    }
+
+    function frame(now) {
+      if (!frame.last) frame.last = now;
+      let dt = (now - frame.last) / 1000;
+      frame.last = now;
+      if (dt > 0.05) dt = 0.05;
+      if (dt < 0) dt = 0;
+      update(dt);
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    window.addEventListener("keydown", (event) => {
+      const code = event.code;
+      if (code === "Space" || code === "ArrowLeft" || code === "ArrowRight" || code === "ArrowUp" || code === "ArrowDown" || code === "KeyR") {
+        event.preventDefault();
+      }
+      if (event.repeat) return;
+      keys.add(code);
+      unlockAudio();
+      if (code === "Space") handleAction(null);
+      else if (code === "KeyR") beginReload();
+    });
+
+    window.addEventListener("keyup", (event) => {
+      keys.delete(event.code);
+    });
+
+    window.addEventListener("blur", () => {
+      keys.clear();
+      pointers.clear();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) keys.clear();
+    });
+
+    window.addEventListener("selectstart", (event) => event.preventDefault());
+    window.addEventListener("dragstart", (event) => event.preventDefault());
+    window.addEventListener("gesturestart", (event) => event.preventDefault());
+
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      pointers.add(event.pointerId);
+      const point = virtualPoint(event.clientX, event.clientY);
+      if (canvas.setPointerCapture) {
+        try { canvas.setPointerCapture(event.pointerId); } catch (err) { /* ignore */ }
+      }
+      handleAction(point);
+    }, { passive: false });
+
+    canvas.addEventListener("pointermove", (event) => {
+      trackAim(virtualPoint(event.clientX, event.clientY));
+    }, { passive: false });
+
+    function releasePointer(event) {
+      pointers.delete(event.pointerId);
+    }
+
+    canvas.addEventListener("pointerup", releasePointer);
+    canvas.addEventListener("pointercancel", releasePointer);
+    canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    canvas.addEventListener("touchmove", (event) => event.preventDefault(), { passive: false });
+
+    window.addEventListener("resize", () => {
+      const prevW = view.cssW;
+      const prevH = view.cssH;
+      layout();
+      if (Math.abs(view.cssW - prevW) > 24 || Math.abs(view.cssH - prevH) > 24) scatterStars();
+    });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", () => layout());
+    }
+
+    layout();
+    scatterStars();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
